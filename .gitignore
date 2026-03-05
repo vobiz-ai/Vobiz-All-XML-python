@@ -35,3 +35,6 @@ logs/
 # Optional: Ngrok specifics if any #
 ####################################
 ngrok.yml
+
+# Documentation and temporary files
+llm.txt

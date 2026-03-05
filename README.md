@@ -28,18 +28,31 @@ It converts sound to text (Deepgram), text to thought (OpenAI LLM), and thought 
 
 ---
 
-## 2. High-Level Architecture
-
-### The Data Flow
+### Visual Sequence
 ```mermaid
-graph TD
-    A[Caller Mobile] <-->|PSTN / VoIP| B[Vobiz Cloud]
-    B <-->|HTTP Post / XML| C[server.py - FastAPI]
-    B <-->|Bidirectional WebSocket| D[agent.py - Agent]
-    D <-->|Streaming WebSocket| E[Deepgram STT]
-    D <-->|REST API| F[OpenAI LLM]
-    D <-->|Streaming REST| G[OpenAI TTS]
-    H[make_call.py] -->|Trigger| B
+sequenceDiagram
+    participant Caller
+    participant Vobiz
+    participant Server as server.py (FastAPI + ngrok)
+    participant Agent as agent.py (WebSocket)
+    participant DG as Deepgram STT
+    participant GPT as OpenAI GPT
+    participant TTS as OpenAI TTS
+
+    Caller->>Vobiz: Inbound/Outbound call
+    Server->>Vobiz: (make_call.py triggers outbound)
+    Vobiz->>Server: POST /answer (webhook)
+    Server-->>Vobiz: XML with Stream bidirectional=true
+    Vobiz->>Agent: WebSocket connect + start event
+    Vobiz->>Agent: media events (caller audio)
+    Agent->>DG: Stream audio for transcription
+    DG-->>Agent: Transcript text
+    Agent->>GPT: Chat completion with transcript
+    GPT-->>Agent: Response text
+    Agent->>TTS: Generate speech (TTS)
+    TTS-->>Agent: PCM audio bytes
+    Agent-->>Vobiz: playAudio events (agent voice)
+    Vobiz-->>Caller: Plays agent audio
 ```
 
 ### Protocol Stack
