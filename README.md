@@ -1,6 +1,6 @@
 # Vobiz AI Voice Agent — Full XML Pipeline
 
-A production-grade AI voice agent that handles real phone calls using Vobiz telephony, Deepgram STT, OpenAI GPT-4o-mini, and OpenAI TTS. Supports a full Vobiz XML test pipeline, LLM function calling for live call transfers, SIP trunk integration, and one-click Render deployment.
+A production-grade AI voice agent that handles real phone calls using Vobiz telephony, Deepgram STT, OpenAI GPT-4o-mini, and OpenAI TTS. Supports a full Vobiz XML test pipeline, LLM function calling for live call transfers, SIP trunk integration, and Docker-based EC2 deployment.
 
 ---
 
@@ -17,7 +17,7 @@ A production-grade AI voice agent that handles real phone calls using Vobiz tele
 9. [Audio Engineering](#9-audio-engineering)
 10. [Setup & Installation](#10-setup--installation)
 11. [Running Locally](#11-running-locally)
-12. [Deploying to Render](#12-deploying-to-render)
+12. [Deploying to EC2](#12-deploying-to-ec2)
 13. [Environment Variables](#13-environment-variables)
 14. [Troubleshooting](#14-troubleshooting)
 
@@ -33,7 +33,7 @@ Caller (Phone)
       |                +--> /answer, /sip, /test-*, /transfer-*
       |                     /trunk-webhook (SIP events)
       |
-      <--WebSocket proxy--> agent.py  (port 8001)
+      <--WebSocket /ws--> agent.py  (CallSession in-process)
             |
             |--> Deepgram Nova-2  (real-time STT)
             |--> OpenAI GPT-4o-mini  (LLM + function calling)
@@ -42,7 +42,7 @@ Caller (Phone)
 ```
 
 **Local dev:** ngrok tunnel is created automatically — no manual setup needed.
-**Production (Render/AWS):** `RENDER_EXTERNAL_URL` is used directly — ngrok is skipped.
+**Production (EC2):** `PUBLIC_URL` is set to EC2 IP — ngrok is skipped entirely.
 
 ---
 
@@ -55,7 +55,7 @@ Caller (Phone)
 - **Graceful hangup** — agent detects goodbye and terminates the call via API
 - **Full XML test pipeline** — IVR menu that demos every Vobiz XML element (Speak, Play, Record, Dial, Stream, Wait, Gather, Hangup, Redirect)
 - **SIP trunk endpoints** — `/sip` origination URI and `/trunk-webhook` for CallInitiated/Hangup events
-- **Render-ready** — `render.yaml` + `Procfile` included, auto-reads `RENDER_EXTERNAL_URL`
+- **Docker + EC2 deployment** — `Dockerfile` + `docker-compose.yml` + `ec2-setup.sh` for one-command production deploy
 - **Dual-mode** — `SERVER_MODE=stream` for AI agent, `SERVER_MODE=test` for XML test pipeline
 
 ---
@@ -63,21 +63,22 @@ Caller (Phone)
 ## 3. Project Structure
 
 ```
-├── server.py          # FastAPI HTTP server — webhooks, ngrok tunnel, WS proxy
+├── server.py          # FastAPI HTTP server — webhooks, ngrok tunnel, WS handler
 ├── agent.py           # WebSocket AI agent — STT/LLM/TTS pipeline + function calling
 ├── make_call.py       # CLI to trigger outbound calls via Vobiz REST API
+├── Dockerfile         # Docker image definition (python:3.11-slim)
+├── docker-compose.yml # Docker Compose service config for EC2
+├── ec2-setup.sh       # One-command EC2 bootstrap script
 ├── requirements.txt   # Pinned Python dependencies
-├── Procfile           # Render/Heroku start command
-├── render.yaml        # Render service configuration
 ├── .env.example       # All environment variables documented
 └── .gitignore
 ```
 
 | File | Role | Lines |
 |---|---|---|
-| `server.py` | Orchestration — HTTP webhooks, tunnel, WS proxy, all XML endpoints | ~900 |
+| `server.py` | Orchestration — HTTP webhooks, tunnel, WS handler, all XML endpoints | ~900 |
 | `agent.py` | Intelligence — audio pipeline, LLM, TTS, function calling | ~550 |
-| `make_call.py` | Connectivity — Vobiz REST API caller, auto-detect ngrok URL | ~170 |
+| `make_call.py` | Connectivity — Vobiz REST API caller, auto-detect server URL | ~180 |
 
 ---
 
@@ -145,14 +146,14 @@ Triggered when the caller says *"goodbye"*, *"bye"*, *"I'm done"*, etc.
 ### Inbound URI — `/sip`
 Configure in **Vobiz Console → SIP → Inbound Trunks → Inbound URI**:
 ```
-https://your-app.onrender.com/sip
+http://13.233.163.77:8000/sip
 ```
 When a call arrives on the SIP trunk, Vobiz POSTs here and gets back XML (AI Stream or IVR menu depending on `SERVER_MODE`).
 
 ### Trunk Webhook — `/trunk-webhook`
 Configure in **Vobiz Console → SIP → Outbound Trunks → Webhook URL**:
 ```
-https://your-app.onrender.com/trunk-webhook
+http://13.233.163.77:8000/trunk-webhook
 ```
 
 Receives JSON events:
@@ -208,7 +209,7 @@ Receives JSON events:
 | POST | `/transfer-complete` | Transfer ended | `<Hangup>` or menu |
 | POST | `/agent-hangup` | Agent-triggered hangup | `<Hangup>` XML |
 | GET | `/health` | Health check / auto-discover | JSON |
-| WS | `/ws` | Vobiz audio stream proxy | Bidirectional proxy |
+| WS | `/ws` | Vobiz audio stream | Direct CallSession handler |
 
 ---
 
@@ -291,6 +292,7 @@ The startup banner shows your ngrok URL:
 ```bash
 python make_call.py                              # calls TO_NUMBER from .env
 python make_call.py --to +919876543210           # specific number
+python make_call.py --curl                       # print curl + make call
 python make_call.py --test-endpoint test-speak   # jump to specific test
 ```
 
@@ -302,25 +304,52 @@ lsof -ti:8000,8001 | xargs kill -9
 
 ---
 
-## 12. Deploying to Render
+## 12. Deploying to EC2
 
-1. Go to [render.com](https://render.com) → **New → Web Service**
-2. Connect `vobiz-ai/Vobiz-All-XML` (or personal repo)
-3. Render auto-detects `render.yaml` — click **Apply**
-4. Add secret env vars in the Render dashboard (see table below)
-5. Click **Deploy** — ~2 minutes
+### One-time setup
 
-After deploy, set in **Vobiz Console → Applications → Answer URL:**
-```
-https://vobiz-voice-agent.onrender.com/answer
+```bash
+# 1. Launch Ubuntu 24.04 t2.micro, open ports 22 + 8000
+
+# 2. SSH in
+ssh -i vobizxml.pem ubuntu@<ec2-ip>
+
+# 3. Run setup script (installs Docker, clones repo, creates .env)
+curl -fsSL https://raw.githubusercontent.com/vobiz-ai/Vobiz-All-XML/main/ec2-setup.sh | bash
+
+# 4. Edit .env with your credentials
+nano /home/ubuntu/Vobiz-All-XML/.env
+# Set: PUBLIC_URL=http://<ec2-ip>:8000
+
+# 5. Start
+cd /home/ubuntu/Vobiz-All-XML
+newgrp docker
+docker compose up -d --build
+
+# 6. Verify
+curl http://<ec2-ip>:8000/health
 ```
 
-Set in **Vobiz Console → SIP → Inbound Trunks → Inbound URI:**
+Set in **Vobiz Console → Applications → Answer URL:**
 ```
-https://vobiz-voice-agent.onrender.com/sip
+http://<ec2-ip>:8000/answer
 ```
 
-> Render free tier sleeps after 15 min inactivity. Upgrade to $7/month Starter for always-on.
+### Update after code changes
+
+```bash
+# Push to GitHub, then on EC2:
+ssh -i vobizxml.pem ubuntu@<ec2-ip> \
+  'cd /home/ubuntu/Vobiz-All-XML && git pull && sudo docker compose up -d --build'
+```
+
+### Useful EC2 commands
+
+```bash
+sudo docker compose logs -f          # live logs
+sudo docker compose restart          # restart container
+sudo docker compose down && sudo docker compose up -d  # full restart
+```
 
 ---
 
@@ -335,12 +364,12 @@ https://vobiz-voice-agent.onrender.com/sip
 | `FROM_NUMBER` | Yes | — | Your Vobiz DID number (E.164) |
 | `TO_NUMBER` | Yes | — | Default destination number |
 | `SERVER_MODE` | No | `stream` | `stream` = AI agent, `test` = XML pipeline |
-| `PUBLIC_URL` | No | — | Production HTTPS URL (skips ngrok) |
+| `PUBLIC_URL` | No | — | EC2 public URL — skips ngrok (e.g. `http://13.233.163.77:8000`) |
 | `AGENT_SYSTEM_PROMPT` | No | built-in | Agent personality |
 | `OPENAI_TTS_VOICE` | No | `alloy` | alloy / echo / fable / onyx / nova / shimmer |
 | `DIAL_TEST_NUMBER` | No | — | Transfer target for Dial test |
 | `TEST_AUDIO_URL` | No | Google beep | MP3/WAV URL for Play test |
-| `HTTP_PORT` | No | `8000` | HTTP port (Render injects `PORT` automatically) |
+| `HTTP_PORT` | No | `8000` | HTTP server port |
 | `AGENT_WS_PORT` | No | `8001` | Internal WebSocket agent port |
 | `NGROK_AUTH_TOKEN` | No | — | ngrok token (reads from system config automatically) |
 
@@ -356,7 +385,7 @@ https://vobiz-voice-agent.onrender.com/sip
 | Dial test `ORIGINATOR_CANCEL` | Verify `FROM_NUMBER` is a DID owned by your Vobiz account and balance is sufficient |
 | Transfer not working | Check server logs for `Executing tool: transfer_call` — verify `VOBIZ_AUTH_ID`/`TOKEN` are set |
 | Slow AI responses (~2-3s) | Reduce `asyncio.sleep(1.2)` in `agent.py` to `0.8` for faster response |
-| Can't hear AI | Verify Answer URL in Vobiz console matches your current ngrok URL |
+| Can't hear AI | Verify Answer URL in Vobiz console matches your current server URL |
 
 ---
 

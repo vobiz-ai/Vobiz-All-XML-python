@@ -26,19 +26,14 @@ load_dotenv()
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-# Render injects PORT automatically; fall back to HTTP_PORT or 8000
-HTTP_PORT = int(os.getenv("PORT") or os.getenv("HTTP_PORT", "8000"))
+HTTP_PORT = int(os.getenv("HTTP_PORT", "8000"))
 WS_PORT = int(os.getenv("AGENT_WS_PORT", "8001"))
 NGROK_AUTH_TOKEN = os.getenv("NGROK_AUTH_TOKEN", "")
 SERVER_MODE = os.getenv("SERVER_MODE", "stream")  # "stream" or "test"
 
-# Production: set PUBLIC_URL to your Render URL to skip ngrok entirely.
-# Render provides this automatically as RENDER_EXTERNAL_URL.
-# You can also set it manually: PUBLIC_URL=https://vobiz-voice-agent.onrender.com
-PUBLIC_URL = (
-    os.getenv("PUBLIC_URL")
-    or os.getenv("RENDER_EXTERNAL_URL", "")
-).rstrip("/")
+# Production (EC2 / any server): set PUBLIC_URL to skip ngrok.
+# Example: PUBLIC_URL=http://13.233.163.77:8000
+PUBLIC_URL = os.getenv("PUBLIC_URL", "").rstrip("/")
 
 # XML Test Pipeline settings
 DIAL_TEST_NUMBER = os.getenv("DIAL_TEST_NUMBER", "")
