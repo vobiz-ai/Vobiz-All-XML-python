@@ -1,371 +1,365 @@
-# 🤖 Vobiz AI Voice Agent: The Ultimate Technical Guide
+# Vobiz AI Voice Agent — Full XML Pipeline
 
-A production-grade, low-layer AI voice agent implementation. This system bridges the gap between traditional PSTN (Public Switched Telephone Network) and modern AI Intelligence using high-performance, real-time streaming.
-
----
-
-## 📑 Table of Contents
-1. [Introduction](#1-introduction)
-2. [High-Level Architecture](#2-high-level-architecture)
-3. [The Orchestration Layer (server.py)](#3-the-orchestration-layer-serverpy)
-4. [The Intelligence Layer (agent.py)](#4-the-intelligence-layer-agentpy)
-5. [The Connectivity Layer (make_call.py)](#5-the-connectivity-layer-make_callpy)
-6. [Vobiz Webhook Reference (HTTP)](#6-vobiz-webhook-reference-http)
-7. [WebSocket Event Protocol (JSON)](#7-websocket-event-protocol-json)
-8. [Audio Engineering & Math](#8-audio-engineering--math)
-9. [Barge-in & Interruption Logic](#9-barge-in--interruption-logic)
-10. [Detailed Webhook Lifecycle](#10-detailed-webhook-lifecycle)
-11. [Stream Implementation Best Practices](#11-stream-implementation-best-practices)
-12. [Setup & Installation](#12-setup--installation)
-13. [Troubleshooting & FAQ](#13-troubleshooting--faq)
+A production-grade AI voice agent that handles real phone calls using Vobiz telephony, Deepgram STT, OpenAI GPT-4o-mini, and OpenAI TTS. Supports a full Vobiz XML test pipeline, LLM function calling for live call transfers, SIP trunk integration, and one-click Render deployment.
 
 ---
 
-## 1. Introduction
-The **Vobiz AI Voice Agent** is a "Human-in-the-Loop" style automation that allows an AI (OpenAI GPT-4o) to handle real phone calls. It goes far beyond standard IVRs by using **Natural Language Understanding (NLU)** to drive dynamic conversations.
+## Table of Contents
 
-It converts sound to text (Deepgram), text to thought (OpenAI LLM), and thought back to sound (OpenAI TTS). It supports **Barge-in**, meaning if you interrupt the AI, it stops talking and listens—just like a human.
+1. [Architecture](#1-architecture)
+2. [Features](#2-features)
+3. [Project Structure](#3-project-structure)
+4. [XML Test Pipeline](#4-xml-test-pipeline)
+5. [LLM Function Calling](#5-llm-function-calling)
+6. [SIP Trunk Integration](#6-sip-trunk-integration)
+7. [Webhook Reference](#7-webhook-reference)
+8. [WebSocket Event Protocol](#8-websocket-event-protocol)
+9. [Audio Engineering](#9-audio-engineering)
+10. [Setup & Installation](#10-setup--installation)
+11. [Running Locally](#11-running-locally)
+12. [Deploying to Render](#12-deploying-to-render)
+13. [Environment Variables](#13-environment-variables)
+14. [Troubleshooting](#14-troubleshooting)
 
 ---
 
-### Visual Sequence
-```mermaid
-sequenceDiagram
-    participant Caller
-    participant Vobiz
-    participant Server as server.py (FastAPI + ngrok)
-    participant Agent as agent.py (WebSocket)
-    participant DG as Deepgram STT
-    participant GPT as OpenAI GPT
-    participant TTS as OpenAI TTS
+## 1. Architecture
 
-    Caller->>Vobiz: Inbound/Outbound call
-    Server->>Vobiz: (make_call.py triggers outbound)
-    Vobiz->>Server: POST /answer (webhook)
-    Server-->>Vobiz: XML with Stream bidirectional=true
-    Vobiz->>Agent: WebSocket connect + start event
-    Vobiz->>Agent: media events (caller audio)
-    Agent->>DG: Stream audio for transcription
-    DG-->>Agent: Transcript text
-    Agent->>GPT: Chat completion with transcript
-    GPT-->>Agent: Response text
-    Agent->>TTS: Generate speech (TTS)
-    TTS-->>Agent: PCM audio bytes
-    Agent-->>Vobiz: playAudio events (agent voice)
-    Vobiz-->>Caller: Plays agent audio
+```
+Caller (Phone)
+  <--PSTN--> Vobiz Cloud
+    <--HTTP/WSS--> server.py  (FastAPI — port 8000)
+      |                |
+      |                +--> /answer, /sip, /test-*, /transfer-*
+      |                     /trunk-webhook (SIP events)
+      |
+      <--WebSocket proxy--> agent.py  (port 8001)
+            |
+            |--> Deepgram Nova-2  (real-time STT)
+            |--> OpenAI GPT-4o-mini  (LLM + function calling)
+            |--> OpenAI TTS-1  (speech synthesis)
+            |--> Vobiz Call Transfer API  (live transfer / hangup)
 ```
 
-### Protocol Stack
-- **Telephony:** SIP/PSTN -> Vobiz XML Webhooks
-- **Streaming:** WebSocket (WSS) -> JSON Encapsulated Audio
-- **Transcription:** WebSocket -> Deepgram Nova-2
-- **Synthesis:** HTTP Stream -> OpenAI TTS-1
+**Local dev:** ngrok tunnel is created automatically — no manual setup needed.
+**Production (Render/AWS):** `RENDER_EXTERNAL_URL` is used directly — ngrok is skipped.
 
 ---
 
-## 3. The Orchestration Layer (`server.py`)
+## 2. Features
 
-`server.py` acts as the gateway and security layer. Its primary jobs are:
-- **Tunneling:** Starts `pyngrok` to provide a public endpoint for Vobiz.
-- **Webhook Handling:** Responds to Answer/Hangup/Status requests from Vobiz.
-- **WebSocket Proxy:** Routes WebSocket traffic from the public ngrok endpoint (port 5000) to the internal agent (port 5001).
-
-### Internal Sequence of `server.py`:
-1. **Startup:** Reads `.env`, initializes `ngrok`, and concurrently starts the FastAPI app and the `agent.py` server thread.
-2. **Answer Event:** When Vobiz hits `/answer`, it fetches the active ngrok URL and builds the `<Stream>` XML.
-3. **Proxy Logic:** Any connection hitting `/ws` is upgraded to a WebSocket and piped directly to the local agent loop using Starlette's `websocket` handling.
-
----
-
-## 4. The Intelligence Layer (`agent.py`)
-
-`agent.py` is the stateful "brain" of the call. For every call, it spawns a `CallSession` object.
-
-### The `CallSession` Lifecycle:
-- **`__init__`**: Initializes conversation history with a system prompt.
-- **`start_deepgram`**: Opens a raw WebSocket to Deepgram with the correct telephony headers: `{"Authorization": "Token <KEY>"}`.
-- **`_listen_deepgram`**: A background task that stays open for the duration of the call, parsing JSON results from Deepgram and handling the "silence timer."
-- **`handle_message`**: The main router for Vobiz events (`start`, `media`, `stop`, `playedStream`, `clearedAudio`).
-- **`_play_audio`**: Chops synthesized audio into 20ms mu-law chunks and pushes them to Vobiz.
+- **Bidirectional audio streaming** — mu-law 8kHz WebSocket stream with barge-in support
+- **Real-time STT** — Deepgram Nova-2 via raw WebSocket, no SDK overhead
+- **LLM reasoning** — GPT-4o-mini with OpenAI function calling
+- **Live call transfer** — agent says "transferring you" and calls the Vobiz Transfer API mid-conversation
+- **Graceful hangup** — agent detects goodbye and terminates the call via API
+- **Full XML test pipeline** — IVR menu that demos every Vobiz XML element (Speak, Play, Record, Dial, Stream, Wait, Gather, Hangup, Redirect)
+- **SIP trunk endpoints** — `/sip` origination URI and `/trunk-webhook` for CallInitiated/Hangup events
+- **Render-ready** — `render.yaml` + `Procfile` included, auto-reads `RENDER_EXTERNAL_URL`
+- **Dual-mode** — `SERVER_MODE=stream` for AI agent, `SERVER_MODE=test` for XML test pipeline
 
 ---
 
-## 5. The Connectivity Layer (`make_call.py`)
+## 3. Project Structure
 
-A utility to automate the Vobiz REST API. It uses the `requests` library to send a `POST` to `https://api.vobiz.ai/api/v1/Account/{auth_id}/Call/`.
-
-**Key Feature: Auto-Discovery**
-The script pings `http://localhost:5000/health` (the local `server.py`) to find the dynamically generated ngrok URL. This saves you from manually copy-pasting URLs every time you restart the project.
-
----
-
-## 6. Vobiz Webhook Reference (HTTP)
-
-Vobiz uses HTTP POST requests with `application/x-www-form-urlencoded` payloads.
-
-### 6.1 Call Answer (`POST /answer`)
-Triggered when an incoming call arrives or an outbound call connects.
-| Parameter | Description |
-|-----------|-------------|
-| `CallUUID` | Unique ID for the call session. |
-| `From` | The caller's number. |
-| `To` | The number being called. |
-| `Direction` | `inbound` or `outbound`. |
-
-**Expected XML Response:**
-```xml
-<Response>
-    <Stream 
-        bidirectional="true" 
-        keepCallAlive="true" 
-        contentType="audio/x-mulaw;rate=8000"
-        statusCallbackUrl="https://your-ngrok-url/stream-status"
-        statusCallbackMethod="POST">
-        wss://your-ngrok-url/ws
-    </Stream>
-</Response>
+```
+├── server.py          # FastAPI HTTP server — webhooks, ngrok tunnel, WS proxy
+├── agent.py           # WebSocket AI agent — STT/LLM/TTS pipeline + function calling
+├── make_call.py       # CLI to trigger outbound calls via Vobiz REST API
+├── requirements.txt   # Pinned Python dependencies
+├── Procfile           # Render/Heroku start command
+├── render.yaml        # Render service configuration
+├── .env.example       # All environment variables documented
+└── .gitignore
 ```
 
-### 6.2 Call Hangup (`POST /hangup`)
-Triggered when the call is fully terminated.
-| Parameter | Description |
-|-----------|-------------|
-| `CallUUID` | Unique ID of the finished call. |
-| `Duration` | Total length in seconds. |
-| `HangupCause` | Why the call ended (`NORMAL_CLEARING`, `ORIGINATOR_CANCEL`, etc). |
+| File | Role | Lines |
+|---|---|---|
+| `server.py` | Orchestration — HTTP webhooks, tunnel, WS proxy, all XML endpoints | ~900 |
+| `agent.py` | Intelligence — audio pipeline, LLM, TTS, function calling | ~550 |
+| `make_call.py` | Connectivity — Vobiz REST API caller, auto-detect ngrok URL | ~170 |
 
 ---
 
-## 7. WebSocket Event Protocol (JSON)
+## 4. XML Test Pipeline
 
-Communications over the WebSocket use a JSON-framed binary protocol.
+Set `SERVER_MODE=test` to activate the IVR test menu. Calling your number plays:
 
-### 7.1 Events FROM Vobiz
-
-#### `start`
-The first packet sent. Provides context.
-```json
-{
-  "event": "start",
-  "streamId": "s-123",
-  "callId": "c-456",
-  "mediaServer": "vobiz-cloud-01"
-}
+```
+"Welcome to the Vobiz XML test suite.
+ Press 1 to test Speak.     Press 2 to test Play.
+ Press 3 to test Record.    Press 4 to test Dial transfer.
+ Press 5 to test AI Stream. Press 6 to test Wait.
+ Press 9 to repeat.         Press 0 to hang up."
 ```
 
-#### `media`
-Sent every 20ms. Contains raw caller audio.
-```json
-{
-  "event": "media",
-  "media": {
-    "payload": "base64_encoded_8khz_mulaw_bytes",
-    "track": "inbound"
-  }
-}
-```
+Each option exercises a specific Vobiz XML element:
 
-#### `playedStream`
-An acknowledgement that the agent's voice reached the caller.
-```json
-{
-  "event": "playedStream",
-  "streamId": "s-123",
-  "name": "greeting_checkpoint"
-}
-```
+| Key | Endpoint | XML Elements Used |
+|---|---|---|
+| 1 | `/test-speak` | `<Speak>` (WOMAN/MAN, en-US/en-GB), `<Redirect>` |
+| 2 | `/test-play` | `<Play>` (remote MP3), `<Speak>`, `<Redirect>` |
+| 3 | `/test-record` | `<Record>` (15s, beep, star to stop), callback reads duration |
+| 4 | `/test-dial` | `<Dial>`, `<Number>`, callerId, action URL |
+| 5 | `/test-stream` | `<Stream>` bidirectional (full AI conversation) |
+| 6 | `/test-wait` | `<Wait>` (3s basic + silence detection) |
+| 0 | `/test-hangup` | `<Speak>`, `<Hangup reason="rejected">` |
+| Menu | `/answer` + `/menu-choice` | `<Gather>` DTMF, `<Redirect>` |
 
-#### `clearedAudio`
-Acknowledgement that the playback buffer was cleared after a `clearAudio` command.
-```json
-{
-  "event": "clearedAudio",
-  "streamId": "s-123"
-}
-```
-
-### 7.2 Commands TO Vobiz
-
-#### `playAudio`
-The primary way to "speak." 
-```json
-{
-  "event": "playAudio",
-  "media": {
-    "contentType": "audio/x-mulaw",
-    "sampleRate": 8000,
-    "payload": "base64_encoded_8khz_mulaw_bytes"
-  }
-}
-```
-
-#### `clearAudio`
-Interruption command. Stop playing everything in the buffer right now.
-```json
-{
-  "event": "clearAudio",
-  "streamId": "s-123"
-}
-```
-
-#### `checkpoint`
-A "marker" in the audio stream. Vobiz replies with `playedStream` once the audio *preceding* this marker finishes playing.
-```json
-{
-  "event": "checkpoint",
-  "streamId": "s-123",
-  "name": "step_1_complete"
-}
-```
-
----
-
-## 8. Audio Engineering & Math
-
-Telephony audio is unique. We deal with **G.711 mu-law (PCMU)**.
-
-### Why Mu-Law?
-Standard 16-bit audio is linear. Mu-law is **logarithmic**. It compresses 14 bits of dynamic range into 8 bits by prioritizing the volume levels where human speech is most common. This reduction is critical for the bandwidth constraints of global telephony.
-
-### The Conversion Algorithm in `agent.py`:
-1. **Input:** OpenAI TTS yields 24,000Hz PCM 16-bit.
-2. **Resampling:** We calculate the ratio (3:1) and pick every 3rd sample (roughly) using a linear interpolation logic to reach the telephony-standard 8kHz.
-3. **Mu-Law Translation:**
-   - Take the 16-bit sample (`-32768` to `32767`).
-   - Add a bias of `33`.
-   - Calculate the exponent and mantissa.
-   - Bit-shift into a single 8-bit byte.
-
----
-
-## 9. Barge-in & Interruption Logic
-
-Barge-in makes an AI feel "real." Without it, the AI is a "radio" that won't stop playing even if you shout.
-
-### Logic Flow:
-1. **Audio Monitoring:** While playing responses, the agent continuously streams caller audio to Deepgram.
-2. **Transcript Arrives:** Deepgram returns a "Final" transcript.
-3. **Detection:** `agent.py` iterates through the transcript. If text is present, it triggers `self._clear_audio()`.
-4. **Action:** Vobiz clears its buffer, the `is_playing` flag is set to `False`, and the agent starts processing the new user input immediately.
-
----
-
-## 10. Detailed Webhook Lifecycle
-
-Understanding the sequence of HTTP requests is vital for debugging.
-
-### Phase 1: Initiation
-- **Incoming Call:** Vobiz hits `/answer`.
-- **Outbound Call:** `make_call.py` hits Vobiz API -> Vobiz dials -> User answers -> Vobiz hits `/answer`.
-
-### Phase 2: Streaming
-- Upon processing the `<Stream>` XML, Vobiz sends a **StartStream** event to the `statusCallbackUrl`.
-- **WebSocket Handshake:** Vobiz connects to `wss://.../ws`.
-- **Checkpoint Sync:** When the agent sends audio + a `checkpoint`, Vobiz sends a **PlayedStream** event to the `statusCallbackUrl` once the audio finishes.
-
-### Phase 3: Hangup
-- When the user hangs up, the WebSocket is closed (`stop` event).
-- Vobiz sends a **StopStream** event to the `statusCallbackUrl`.
-- Vobiz sends a final **POST /hangup** to the configured Hangup URL.
-
----
-
-## 11. Stream Implementation Best Practices
-
-1. **Fast Responses:** Webhooks must respond within 1-2 seconds. Use `gpt-4o-mini` for speed.
-2. **Stateless Logic:** Treat each call independently. Use `CallUUID` to track logs.
-3. **Endpointing:** Deepgram's `endpointing=300` ensures we catch the end of a sentence quickly without long awkward pauses.
-4. **Resampling Quality:** Always use linear interpolation or better when downsampling from 24kHz to 8kHz to avoid "metallic" aliasing in the AI's voice.
-5. **Memory Management:** Clean up the `conversation_history` and close WebSocket connections on the `stop` event to prevent memory leaks in the server.
-
----
-
-## 12. Setup & Installation
-
-### Prerequisites
-- Python 3.11+
-- [ngrok](https://ngrok.com) installed and authenticated.
-- API Keys for Deepgram and OpenAI.
-- Vobiz Auth ID and Auth Token.
-
-### Installation
+Jump directly to any test from CLI:
 ```bash
-# Clone the repository
-git clone https://github.com/Piyush-sahoo/Vobiz-Websockets.git
-cd Vobiz-Websockets
+python make_call.py --test-endpoint test-speak
+python make_call.py --test-endpoint test-record
+```
 
-# Setup environment
+---
+
+## 5. LLM Function Calling
+
+The AI agent has two tools it can invoke mid-conversation:
+
+### `transfer_call`
+Triggered when the caller says something like *"transfer me to +91 89398 94913"*.
+
+**Flow:**
+1. GPT detects intent → calls `transfer_call(phone_number="+918939894913")`
+2. Agent plays announcement via TTS: *"Transferring your call now. Please hold."*
+3. Agent POSTs to Vobiz Transfer API: `POST /Account/{id}/Call/{uuid}/`
+4. Vobiz interrupts the Stream and fetches `/transfer-to-number?number=+918939894913`
+5. That endpoint returns `<Dial><Number>+918939894913</Number></Dial>` XML
+6. Caller is connected to the target number
+
+### `end_call`
+Triggered when the caller says *"goodbye"*, *"bye"*, *"I'm done"*, etc.
+
+**Flow:**
+1. GPT detects farewell → calls `end_call(goodbye_message="Goodbye! Have a great day!")`
+2. Agent plays goodbye via TTS
+3. Agent calls Vobiz Transfer API pointing to `/agent-hangup`
+4. Vobiz fetches that endpoint and gets `<Hangup/>` XML
+
+---
+
+## 6. SIP Trunk Integration
+
+### Inbound URI — `/sip`
+Configure in **Vobiz Console → SIP → Inbound Trunks → Inbound URI**:
+```
+https://your-app.onrender.com/sip
+```
+When a call arrives on the SIP trunk, Vobiz POSTs here and gets back XML (AI Stream or IVR menu depending on `SERVER_MODE`).
+
+### Trunk Webhook — `/trunk-webhook`
+Configure in **Vobiz Console → SIP → Outbound Trunks → Webhook URL**:
+```
+https://your-app.onrender.com/trunk-webhook
+```
+
+Receives JSON events:
+
+**`CallInitiated`** — fires on every outbound attempt:
+```json
+{
+  "Event": "CallInitiated",
+  "CallUUID": "uuid",
+  "From": "+917971542961",
+  "To": "+918939894913",
+  "Allowed": true,
+  "Reason": ""
+}
+```
+
+**`Hangup`** — fires when call ends with full CDR:
+```json
+{
+  "Event": "Hangup",
+  "Duration": 125,
+  "Billsec": 120,
+  "Cost": 0.75,
+  "Currency": "INR",
+  "MOS": 4.2,
+  "Jitter": 12
+}
+```
+
+---
+
+## 7. Webhook Reference
+
+| Method | Endpoint | Trigger | Returns |
+|---|---|---|---|
+| POST | `/answer` | Call connects (stream mode) | `<Stream>` XML |
+| POST | `/answer` | Call connects (test mode) | `<Gather>` IVR menu XML |
+| POST | `/sip` | Inbound SIP trunk call | `<Stream>` or IVR XML |
+| POST | `/hangup` | Call ends | `200 OK` |
+| POST | `/stream-status` | Stream lifecycle events | `200 OK` |
+| POST | `/trunk-webhook` | SIP trunk events (JSON) | `{"status":"received"}` |
+| POST | `/menu-choice` | DTMF digit from Gather | `<Redirect>` XML |
+| POST | `/test-speak` | Test 1 | `<Speak>` XML |
+| POST | `/test-play` | Test 2 | `<Play>` XML |
+| POST | `/test-record` | Test 3 | `<Record>` XML |
+| POST | `/test-record-callback` | Recording done | `<Speak>` + duration |
+| POST | `/test-dial` | Test 4 | `<Dial>` XML |
+| POST | `/test-dial-status` | Dial completed | `<Speak>` + status |
+| POST | `/test-stream` | Test 5 | `<Stream>` XML |
+| POST | `/test-wait` | Test 6 | `<Wait>` XML |
+| POST | `/test-hangup` | Test 0 | `<Hangup>` XML |
+| POST | `/transfer-to-number` | Agent-triggered transfer | `<Dial>` XML |
+| POST | `/transfer-complete` | Transfer ended | `<Hangup>` or menu |
+| POST | `/agent-hangup` | Agent-triggered hangup | `<Hangup>` XML |
+| GET | `/health` | Health check / auto-discover | JSON |
+| WS | `/ws` | Vobiz audio stream proxy | Bidirectional proxy |
+
+---
+
+## 8. WebSocket Event Protocol
+
+### Events FROM Vobiz to Agent
+
+```json
+{ "event": "start",       "streamId": "s-123", "callId": "c-456" }
+{ "event": "media",       "media": { "payload": "<base64-mulaw>", "track": "inbound" } }
+{ "event": "playedStream","name": "response-3" }
+{ "event": "clearedAudio","streamId": "s-123" }
+{ "event": "stop",        "streamId": "s-123" }
+```
+
+### Commands FROM Agent to Vobiz
+
+```json
+{ "event": "playAudio",  "media": { "contentType": "audio/x-mulaw", "sampleRate": 8000, "payload": "<base64>" } }
+{ "event": "clearAudio", "streamId": "s-123" }
+{ "event": "checkpoint", "streamId": "s-123", "name": "response-3" }
+```
+
+---
+
+## 9. Audio Engineering
+
+### Pipeline: OpenAI TTS → Vobiz
+
+```
+OpenAI TTS-1 (PCM 16-bit, 24kHz)
+  → resample_linear(24000 → 8000)    3:1 ratio, linear interpolation
+  → pcm16_to_mulaw()                 logarithmic 16-bit → 8-bit compression
+  → chunk into 160-byte frames       20ms @ 8kHz mono
+  → base64 encode
+  → playAudio WebSocket event → Vobiz → Caller
+```
+
+Vobiz uses **G.711 mu-law (PCMU)** — the global telephony standard. Mu-law uses a logarithmic scale that prioritizes the amplitude range of human speech, halving bandwidth vs linear 16-bit PCM while maintaining perceptual quality on voice calls.
+
+---
+
+## 10. Setup & Installation
+
+**Prerequisites:** Python 3.9+, ngrok (local dev only), API keys for Deepgram and OpenAI, Vobiz account.
+
+```bash
+git clone git@github.com:Piyush-sahoo/Vobiz-Call-All-XML.git
+cd Vobiz-Call-All-XML
+
 python -m venv venv
-source venv/bin/activate  # Or venv\Scripts\activate on Windows
+source venv/bin/activate       # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 
-# Configure settings
 cp .env.example .env
-# Fill out your .env file
+# Fill in your API keys in .env
 ```
 
-### Running
+---
+
+## 11. Running Locally
+
 ```bash
-# terminal 1
+source venv/bin/activate
 python server.py
+```
 
-# terminal 2
-python make_call.py
+The startup banner shows your ngrok URL:
+```
+============================================================
+  Vobiz Voice Agent Server
+   Mode:       STREAM
+   Public URL: https://xxxx.ngrok-free.app
+   Answer URL: https://xxxx.ngrok-free.app/answer
+   SIP URI:    https://xxxx.ngrok-free.app/sip
+============================================================
+```
+
+**Make an outbound call:**
+```bash
+python make_call.py                              # calls TO_NUMBER from .env
+python make_call.py --to +919876543210           # specific number
+python make_call.py --test-endpoint test-speak   # jump to specific test
+```
+
+**Kill stale processes if ports are busy:**
+```bash
+pkill -9 ngrok
+lsof -ti:8000,8001 | xargs kill -9
 ```
 
 ---
 
-## 13. Troubleshooting & FAQ
+## 12. Deploying to Render
 
-**Error: "python-multipart must be installed"**
-- Fix: `pip install python-multipart`. This is required by FastAPI to handle the form-encoded data Vobiz sends.
+1. Go to [render.com](https://render.com) → **New → Web Service**
+2. Connect `vobiz-ai/Vobiz-All-XML` (or personal repo)
+3. Render auto-detects `render.yaml` — click **Apply**
+4. Add secret env vars in the Render dashboard (see table below)
+5. Click **Deploy** — ~2 minutes
 
-**Error: "'ClientConnection' object has no attribute 'open'"**
-- Fix: This project is updated for `websockets` v16. We use try/except blocks instead of checking the `.open` property.
+After deploy, set in **Vobiz Console → Applications → Answer URL:**
+```
+https://vobiz-voice-agent.onrender.com/answer
+```
 
-**Issue: "Agent is slow to respond"**
-- Cause: Usually network latency or a high `asyncio.sleep` value in silence detection.
-- Solution: Reduce `utterance_end_ms` in the Deepgram config or reduce the silence sleep timer in `agent.py`.
+Set in **Vobiz Console → SIP → Inbound Trunks → Inbound URI:**
+```
+https://vobiz-voice-agent.onrender.com/sip
+```
 
-**Issue: "I can't hear the AI"**
-- Check the console logs. Ensure `generate_tts_audio` is successfully returning bytes. Ensure the Vobiz `AnswerURL` is correctly set to your ngrok tunnel URL.
+> Render free tier sleeps after 15 min inactivity. Upgrade to $7/month Starter for always-on.
 
 ---
 
-## 📚 Appendix: Example XML & JSON
+## 13. Environment Variables
 
-### Answer Response XML
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Stream bidirectional="true" keepCallAlive="true" contentType="audio/x-mulaw;rate=8000" statusCallbackUrl="https://.../stream-status">
-        wss://your-url.ngrok-free.app/ws
-    </Stream>
-</Response>
-```
-
-### WebSocket Media Packet
-```json
-{
-  "event": "media",
-  "media": {
-    "payload": "m6D...base64...",
-    "track": "inbound",
-    "chunkId": "42"
-  }
-}
-```
-
-### WebSocket Stop Packet
-```json
-{
-  "event": "stop",
-  "streamId": "227d997a-0af4-447c-a3f3-b243e902e527"
-}
-```
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `OPENAI_API_KEY` | Yes | — | OpenAI key (LLM + TTS) |
+| `DEEPGRAM_API_KEY` | Yes | — | Deepgram key (STT) |
+| `VOBIZ_AUTH_ID` | Yes | — | Vobiz account ID |
+| `VOBIZ_AUTH_TOKEN` | Yes | — | Vobiz auth token |
+| `FROM_NUMBER` | Yes | — | Your Vobiz DID number (E.164) |
+| `TO_NUMBER` | Yes | — | Default destination number |
+| `SERVER_MODE` | No | `stream` | `stream` = AI agent, `test` = XML pipeline |
+| `PUBLIC_URL` | No | — | Production HTTPS URL (skips ngrok) |
+| `AGENT_SYSTEM_PROMPT` | No | built-in | Agent personality |
+| `OPENAI_TTS_VOICE` | No | `alloy` | alloy / echo / fable / onyx / nova / shimmer |
+| `DIAL_TEST_NUMBER` | No | — | Transfer target for Dial test |
+| `TEST_AUDIO_URL` | No | Google beep | MP3/WAV URL for Play test |
+| `HTTP_PORT` | No | `8000` | HTTP port (Render injects `PORT` automatically) |
+| `AGENT_WS_PORT` | No | `8001` | Internal WebSocket agent port |
+| `NGROK_AUTH_TOKEN` | No | — | ngrok token (reads from system config automatically) |
 
 ---
 
-## ⚖️ License
-MIT License. Created for Vobiz Telephony integration patterns.
-Developed by Piyush Sahoo.
+## 14. Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| `Address already in use` | `pkill -9 ngrok && lsof -ti:8000,8001 \| xargs kill -9` |
+| `ngrok ERR_NGROK_334` | `pkill -9 ngrok && sleep 1 && python server.py` |
+| Agent crashes on startup | Check all required env vars are set in `.env` |
+| Dial test `ORIGINATOR_CANCEL` | Verify `FROM_NUMBER` is a DID owned by your Vobiz account and balance is sufficient |
+| Transfer not working | Check server logs for `Executing tool: transfer_call` — verify `VOBIZ_AUTH_ID`/`TOKEN` are set |
+| Slow AI responses (~2-3s) | Reduce `asyncio.sleep(1.2)` in `agent.py` to `0.8` for faster response |
+| Can't hear AI | Verify Answer URL in Vobiz console matches your current ngrok URL |
+
+---
+
+## License
+
+MIT License. Built on [Vobiz](https://vobiz.ai) telephony infrastructure.
