@@ -14,7 +14,6 @@ import os
 import sys
 import asyncio
 import logging
-import threading
 import uvicorn
 
 from fastapi import FastAPI, Request
@@ -855,76 +854,47 @@ async def agent_hangup(request: Request):
 
 
 # ===========================================================================
-#  WebSocket proxy (forward ngrok WSS -> local agent WS)
+#  WebSocket — direct agent handler (no proxy, no separate port)
 # ===========================================================================
 
 from starlette.websockets import WebSocket as StarletteWebSocket
-import websockets as ws_lib
 
 
 @app.websocket("/ws")
-async def websocket_proxy(websocket: StarletteWebSocket):
+async def websocket_handler(websocket: StarletteWebSocket):
     """
-    Proxy WebSocket connection from Vobiz (via ngrok) to the agent server.
-    This allows a single ngrok tunnel to handle both HTTP and WebSocket.
+    Handle WebSocket connection from Vobiz directly in FastAPI.
+    In production (Render) there is no separate agent port — the CallSession
+    runs directly here. In local dev this is the same: the ngrok tunnel
+    points here and the session is handled in-process.
     """
+    from agent import CallSession
+    import websockets.exceptions as ws_exc
+
     await websocket.accept()
-    logger.info("WebSocket connection accepted from Vobiz (via ngrok)")
+    logger.info("WebSocket connection accepted from Vobiz")
 
-    agent_url = f"ws://127.0.0.1:{WS_PORT}"
+    session = CallSession(websocket)
     try:
-        async with ws_lib.connect(agent_url) as agent_ws:
-            logger.info(f"Connected to agent at {agent_url}")
-
-            async def forward_to_agent():
-                """Forward messages from Vobiz -> Agent."""
-                try:
-                    while True:
-                        data = await websocket.receive_text()
-                        await agent_ws.send(data)
-                except Exception:
-                    pass
-
-            async def forward_to_vobiz():
-                """Forward messages from Agent -> Vobiz."""
-                try:
-                    async for message in agent_ws:
-                        await websocket.send_text(message)
-                except Exception:
-                    pass
-
-            done, pending = await asyncio.wait(
-                [
-                    asyncio.create_task(forward_to_agent()),
-                    asyncio.create_task(forward_to_vobiz()),
-                ],
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-
-            for task in pending:
-                task.cancel()
-
+        while True:
+            try:
+                message = await websocket.receive_text()
+                await session.handle_message(message)
+            except Exception as e:
+                if "disconnect" in str(e).lower() or "close" in str(e).lower():
+                    break
+                logger.error(f"WebSocket message error: {e}")
+                break
     except Exception as e:
-        logger.error(f"Agent WebSocket connection error: {e}")
+        logger.error(f"WebSocket connection error: {e}")
     finally:
-        logger.info("WebSocket proxy connection closed")
+        await session.cleanup()
+        logger.info("WebSocket connection closed")
 
 
 # ===========================================================================
 #  Main
-# ===========================================================================
-
-def run_agent_server():
-    """Start the agent WebSocket server in a separate thread."""
-    from agent import start_agent_server
-
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(start_agent_server())
-    loop.run_forever()
-
-
-def _print_banner():
+# ===========================================================================def _print_banner():
     """Print startup banner with all important URLs."""
     logger.info("")
     logger.info(f"{'=' * 60}")
@@ -971,7 +941,11 @@ def setup_ngrok():
 
 
 def main():
-    """Start everything: agent server, (optionally ngrok), HTTP server."""
+    """Start everything: (optionally ngrok), HTTP server.
+
+    The agent WebSocket sessions now run directly inside FastAPI's /ws
+    endpoint — no separate port, no proxy, works on Render out of the box.
+    """
     global NGROK_URL
 
     is_production = bool(PUBLIC_URL)
@@ -982,17 +956,8 @@ def main():
         logger.info(f"Public URL: {NGROK_URL}")
     else:
         logger.info(f"Starting Vobiz Voice Agent Server in LOCAL mode (ngrok)...")
-
-    # 1. Start agent WebSocket server in background thread
-    agent_thread = threading.Thread(target=run_agent_server, daemon=True)
-    agent_thread.start()
-    logger.info(f"Agent WebSocket server starting on port {WS_PORT}")
-
-    import time
-    time.sleep(1)
-
-    # 2. Setup tunnel (ngrok in local dev, skip in production)
-    if not is_production:
+        import time
+        time.sleep(1)
         try:
             setup_ngrok()
         except Exception as e:
@@ -1002,7 +967,7 @@ def main():
 
     _print_banner()
 
-    # 3. Start HTTP server (blocking)
+    # Start HTTP server (blocking) — WebSocket sessions run inside FastAPI
     logger.info(f"HTTP server starting on port {HTTP_PORT}")
     uvicorn.run(app, host="0.0.0.0", port=HTTP_PORT, log_level="info")
 
