@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <title>VoBiz Calling</title>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Zendesk Apps Framework SDK -->
+    <script src="https://assets.zendesk.com/apps/sdk/2.0/zaf_sdk.js"></script>
+    <!-- JsSIP WebRTC client, vendored.
+         Not a CDN. npm's jssip does not ship a browser bundle at
+         dist/jssip.min.js — that path 404s on jsdelivr for any exact version,
+         and only the floating @3 range resolves to something. A 404 here leaves
+         JsSIP undefined and the panel frozen on "Registering…" with no error.
+         This file is built the same way the Freshdesk app builds it:
+           npm i jssip@3.10.1 && npx esbuild entry.js --bundle --minify \
+             --format=iife --global-name=JsSIP --outfile=assets/lib/jssip.min.js
+         where entry.js is: module.exports = require('jssip');
+         Vendoring also removes the external-script dependency entirely, which
+         is what Marketplace review wants anyway. -->
+    <script src="lib/jssip.min.js"></script>
+    <!-- Custom Style -->
+    <link rel="stylesheet" type="text/css" href="styles/style.css" />
+  </head>
+  <body>
+    <div class="main">
+      <header class="app-header">
+        <div class="header-status-wrapper">
+          <p id="status" class="status-connecting">Connecting…</p>
+        </div>
+        <button id="settings-toggle-btn" title="Authentication Settings" class="btn-settings-toggle">⚙️ Login</button>
+      </header>
+
+      <!-- Login / Authentication View -->
+      <div id="login-view" class="view-panel" style="display:none;">
+        <div class="login-card">
+          <h4 style="margin: 0 0 4px 0; font-size: 16px; font-weight: 600; color: #1f73b7;">Vobiz Integration</h4>
+          <p style="margin: 0 0 15px 0; font-size: 12px; color: #68737d;">Connect your Vobiz account to Zendesk.</p>
+          
+          <div class="form-group" style="margin-bottom: 12px;">
+            <label class="input-label">API Key / Auth ID</label>
+            <input type="text" id="auth-id-input" class="dial-input" style="font-size: 13px; text-align: left;" placeholder="vobiz_live_xxxxxxxx" />
+          </div>
+
+          <div class="form-group" style="margin-bottom: 12px;">
+            <label class="input-label">Auth Token</label>
+            <input type="password" id="auth-token-input" class="dial-input" style="font-size: 13px; text-align: left;" placeholder="Enter Auth Token" />
+          </div>
+
+          <button id="auth-save-btn" class="btn btn-auth" style="margin-top: 10px;">Sign in</button>
+          <p id="vobiz-login-status" class="login-status"></p>
+          <p class="login-note">Your Auth Token is sent to your calling backend once and exchanged for a session. It is never stored in this browser.</p>
+        </div>
+      </div>
+
+      <!-- Dialer View -->
+      <div id="dialer-view" class="view-panel">
+        <!-- Number Selection Controls -->
+        <div class="number-selectors-container" style="margin-bottom: 8px; display: flex; flex-direction: column; gap: 6px;">
+          <div>
+            <label class="input-label" style="font-size: 11px; margin-bottom: 2px;">Outbound Caller ID (From)</label>
+            <select id="from-number-select" class="dial-input select-input" style="font-size: 12px; height: 30px; padding: 2px 6px;">
+              <option value="">Select caller ID...</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="input-container">
+          <input type="tel" id="dialnumber" class="dial-input" placeholder="Enter customer phone number" />
+        </div>
+        
+        <!-- Dialpad numbers -->
+        <div class="dialpad">
+          <button class="dial-key" onclick="pressKey('1')">1</button>
+          <button class="dial-key" onclick="pressKey('2')">2</button>
+          <button class="dial-key" onclick="pressKey('3')">3</button>
+          <button class="dial-key" onclick="pressKey('4')">4</button>
+          <button class="dial-key" onclick="pressKey('5')">5</button>
+          <button class="dial-key" onclick="pressKey('6')">6</button>
+          <button class="dial-key" onclick="pressKey('7')">7</button>
+          <button class="dial-key" onclick="pressKey('8')">8</button>
+          <button class="dial-key" onclick="pressKey('9')">9</button>
+          <button class="dial-key" onclick="pressKey('*')">*</button>
+          <button class="dial-key" onclick="pressKey('0')">0</button>
+          <button class="dial-key" onclick="pressKey('#')">#</button>
+        </div>
+
+        <div class="actions">
+          <button id="dialbtn" class="btn btn-call" disabled>Call</button>
+        </div>
+        <p id="dial-hint" class="dial-hint"></p>
+      </div>
+
+      <!-- Active Call / Inbound Ringing View -->
+      <div id="call-view" class="view-panel" style="display:none;">
+        <div class="call-card">
+          <div class="call-animation">
+            <span class="pulse-ring"></span>
+            <div class="caller-icon">👤</div>
+          </div>
+          <h4 id="caller-name">Unknown Caller</h4>
+          <p id="caller-phone"></p>
+          <p id="call-state-text" class="call-ringing">Ringing…</p>
+          <h2 id="call-timer" style="display:none;">00:00</h2>
+        </div>
+
+        <!-- Contact Profile Link -->
+        <div id="contact-info" class="contact-card" style="display:none;">
+          <p><strong>Zendesk User:</strong> <span id="zd-user-name"></span></p>
+          <button id="view-profile-btn" class="btn btn-secondary btn-sm">View Profile</button>
+        </div>
+
+        <!-- Post-call logging (displayed when call is active or just ended) -->
+        <div id="call-log-section" class="log-card" style="display:none;">
+          <div id="recording-preview-box" style="background-color: #edf7ed; border: 1px solid #c8e6c9; border-radius: 4px; padding: 6px 8px; margin-bottom: 10px; font-size: 11px; color: #1e4620; display: flex; align-items: center; gap: 6px;">
+            <span>🎙️</span>
+            <span><strong>Call Recording Enabled:</strong> Audio will auto-attach to Zendesk Ticket.</span>
+          </div>
+          <label for="call-notes" class="input-label">Call Notes</label>
+          <textarea id="call-notes" class="log-notes" placeholder="Enter notes from the call..."></textarea>
+          <button id="logbtn" class="btn btn-primary btn-sm">Save Call Log</button>
+        </div>
+
+        <div class="actions">
+          <button id="hangupbtn" class="btn btn-hangup">Hang Up</button>
+        </div>
+      </div>
+
+      <!-- Audio Element for WebRTC audio -->
+      <audio id="vobiz-remote-audio" autoplay></audio>
+    </div>
+
+    <!-- CTI App Logic -->
+    <script src="scripts/app.js"></script>
+  </body>
+</html>

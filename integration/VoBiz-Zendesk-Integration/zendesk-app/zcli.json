@@ -1,0 +1,7 @@
+{
+  "parameters": {
+    "backend_url": "http://localhost:8092",
+    "agent_id": "test-agent",
+    "registrar_url": "wss://registrar.vobiz.ai:5063/"
+  }
+}

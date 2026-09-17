@@ -1,0 +1,424 @@
+/* VoBiz Calling App Stylesheet */
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  font-size: 13px;
+  color: #2f3941;
+  background-color: #f8f9f9;
+  box-sizing: border-box;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+*, *:before, *:after {
+  box-sizing: inherit;
+}
+
+.main {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 8px 10px;
+  width: 100%;
+}
+
+/* Header & Status */
+.app-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid #e9ebed;
+  padding-bottom: 6px;
+  margin-bottom: 8px;
+}
+
+.logo-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #1f73b7;
+}
+
+.header-status-wrapper {
+  display: flex;
+  align-items: center;
+}
+
+.btn-settings-toggle {
+  background: #ffffff;
+  border: 1px solid #d8dcde;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11px;
+  padding: 2px 6px;
+  color: #1f73b7;
+  font-weight: 600;
+}
+
+.btn-settings-toggle:hover {
+  background: #f8f9f9;
+  border-color: #c2c6c9;
+}
+
+#status {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 2px 6px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+}
+
+.status-connecting {
+  background-color: #fff0e0;
+  color: #8c510a;
+}
+
+.status-ready {
+  background-color: #edf7ed;
+  color: #1e4620;
+}
+
+.status-ready::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  background-color: #2e7d32;
+  border-radius: 50%;
+  margin-right: 5px;
+  animation: pulse-green 2s infinite;
+}
+
+.status-error {
+  background-color: #fde8e8;
+  color: #9b1c1c;
+}
+
+@keyframes pulse-green {
+  0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(46, 125, 50, 0.7); }
+  70% { transform: scale(1); box-shadow: 0 0 0 5px rgba(46, 125, 50, 0); }
+  100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(46, 125, 50, 0); }
+}
+
+/* Views Panels */
+.view-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+/* Dialer View */
+.input-container {
+  margin-bottom: 8px;
+}
+
+.dial-input {
+  width: 100%;
+  padding: 6px 8px;
+  font-size: 15px;
+  border: 1px solid #d8dcde;
+  border-radius: 4px;
+  background-color: #ffffff;
+  color: #2f3941;
+  text-align: center;
+  letter-spacing: 1px;
+}
+
+.dial-input:focus {
+  border-color: #1f73b7;
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(31, 115, 183, 0.15);
+}
+
+select.select-input {
+  cursor: pointer;
+  appearance: auto;
+  padding: 2px 6px;
+  background-color: #ffffff;
+  color: #2f3941;
+  font-weight: 500;
+  border: 1px solid #d8dcde;
+  border-radius: 4px;
+}
+
+.dialpad {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  max-width: 220px;
+  margin: 0 auto 10px auto;
+}
+
+.dial-key {
+  height: 38px;
+  font-size: 16px;
+  font-weight: 500;
+  font-weight: 500;
+  background-color: #ffffff;
+  border: 1px solid #d8dcde;
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  transition: background-color 0.1s, border-color 0.1s;
+}
+
+.dial-key:hover {
+  background-color: #f8f9f9;
+  border-color: #c2c6c9;
+}
+
+.dial-key:active {
+  background-color: #edf1f2;
+}
+
+/* Buttons */
+.btn {
+  width: 100%;
+  padding: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  border-radius: 4px;
+  border: none;
+  cursor: pointer;
+  text-align: center;
+  transition: background-color 0.15s;
+}
+
+.btn-call {
+  background-color: #038153;
+  color: #ffffff;
+}
+
+.btn-call:hover {
+  background-color: #026b45;
+}
+
+.btn-hangup {
+  background-color: #cc3333;
+  color: #ffffff;
+}
+
+.btn-hangup:hover {
+  background-color: #b32424;
+}
+
+.btn-primary {
+  background-color: #1f73b7;
+  color: #ffffff;
+}
+
+.btn-primary:hover {
+  background-color: #165080;
+}
+
+.btn-secondary {
+  background-color: #ffffff;
+  border: 1px solid #c2c6c9;
+  color: #49545c;
+}
+
+.btn-secondary:hover {
+  background-color: #f8f9f9;
+}
+
+.btn-sm {
+  padding: 6px 12px;
+  font-size: 12px;
+  width: auto;
+}
+
+/* Active Call Panel */
+.call-card {
+  text-align: center;
+  margin-top: 10px;
+  margin-bottom: 15px;
+}
+
+.call-animation {
+  position: relative;
+  width: 60px;
+  height: 60px;
+  margin: 0 auto 10px auto;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.caller-icon {
+  font-size: 28px;
+  z-index: 2;
+}
+
+.pulse-ring {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  border: 2px solid #038153;
+  border-radius: 50%;
+  animation: pulse-ring-animation 1.5s cubic-bezier(0.215, 0.61, 0.355, 1) infinite;
+  z-index: 1;
+}
+
+@keyframes pulse-ring-animation {
+  0% { transform: scale(0.95); opacity: 0.8; }
+  50% { transform: scale(1.3); opacity: 0.3; }
+  100% { transform: scale(1.6); opacity: 0; }
+}
+
+.call-card h4 {
+  margin: 5px 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.call-card p {
+  margin: 2px 0;
+  font-size: 13px;
+  color: #68737d;
+}
+
+#call-state-text {
+  font-weight: 500;
+  font-size: 13px;
+  margin-top: 8px;
+}
+
+.call-ringing { color: #d86800; }
+.call-active { color: #038153; }
+.call-ended { color: #cc3333; }
+
+#call-timer {
+  font-size: 24px;
+  font-weight: 500;
+  margin: 10px 0;
+}
+
+/* Zendesk User Match Card */
+.contact-card {
+  background-color: #ffffff;
+  border: 1px solid #e9ebed;
+  border-radius: 4px;
+  padding: 10px 12px;
+  margin-bottom: 15px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.contact-card p {
+  margin: 0;
+  font-size: 13px;
+}
+
+/* Note logs card */
+.log-card {
+  margin-bottom: 15px;
+}
+
+.input-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 4px;
+  color: #49545c;
+}
+
+.log-notes {
+  width: 100%;
+  height: 70px;
+  padding: 8px;
+  border: 1px solid #d8dcde;
+  border-radius: 4px;
+  resize: none;
+  font-size: 13px;
+  font-family: inherit;
+  margin-bottom: 8px;
+}
+
+.log-notes:focus {
+  border-color: #1f73b7;
+  outline: none;
+}
+
+/* Login Card & Auth Button */
+.login-card {
+  background-color: #ffffff;
+  border: 1px solid #d8dcde;
+  border-radius: 6px;
+  padding: 16px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05);
+  margin-top: 10px;
+}
+
+.btn-auth {
+  background-color: #1bb99a;
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 10px;
+}
+
+.btn-auth:hover {
+  background-color: #149b80;
+}
+
+/* ── added for the browser-A-leg rewrite ───────────────────────────────────── */
+
+.login-status {
+  margin: 8px 0 0 0;
+  font-size: 11.5px;
+  color: #68737d;
+  min-height: 14px;
+}
+
+.login-note {
+  margin: 8px 0 0 0;
+  font-size: 10.5px;
+  line-height: 1.4;
+  color: #87929d;
+}
+
+.dial-hint {
+  margin: 6px 0 0 0;
+  font-size: 11px;
+  color: #68737d;
+  text-align: center;
+  min-height: 14px;
+}
+
+/* The Call button is disabled until the account session AND the SIP
+   registration are both up. Make that legible rather than mysterious. */
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* ── ticket sidebar ───────────────────────────────────────────────────────── */
+
+.sidebar-card {
+  padding: 10px 12px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.sidebar-requester {
+  margin: 0 0 8px 0;
+  font-size: 12.5px;
+  color: #2f3941;
+  font-weight: 500;
+  word-break: break-word;
+}
+
+.sidebar-hint {
+  margin: 6px 0 0 0;
+  font-size: 11px;
+  color: #68737d;
+  min-height: 14px;
+}

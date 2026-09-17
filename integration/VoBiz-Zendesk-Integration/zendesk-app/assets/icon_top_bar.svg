@@ -1,0 +1,14 @@
+<!--
+  Top bar icon.
+
+  The filename is load-bearing: Zendesk reads assets/icon_top_bar.svg for a
+  top_bar app and nothing else. This file used to be called icon.svg, which the
+  product ignores, so the panel rendered with no icon at all.
+
+  Marketplace guidance for this slot: SVG only, monochrome, no gradients or
+  shadows, square artboard, legible at 18x18 inside a 30x30 rounded box.
+  currentColor lets Zendesk tint it for light and dark chrome.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+  <path fill="currentColor" d="M12 2a8 8 0 0 0-8 8v4.5A2.5 2.5 0 0 0 6.5 17H8a1 1 0 0 0 1-1v-4a1 1 0 0 0-1-1H6v-1a6 6 0 0 1 12 0v1h-2a1 1 0 0 0-1 1v4a1 1 0 0 0 1 1h2v.5a1.5 1.5 0 0 1-1.5 1.5H13a1 1 0 0 0 0 2h3.5A3.5 3.5 0 0 0 20 17.5V10a8 8 0 0 0-8-8z"/>
+</svg>
